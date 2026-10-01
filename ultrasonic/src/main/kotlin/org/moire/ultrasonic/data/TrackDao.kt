@@ -1,0 +1,49 @@
+package org.moire.ultrasonic.data
+
+import androidx.room.Dao
+import androidx.room.Entity
+import androidx.room.Query
+import org.moire.ultrasonic.domain.Track
+
+@Dao
+@Entity(tableName = "tracks")
+interface TrackDao : GenericDao<Track> {
+    /**
+     * Clear the whole database
+     */
+    @Query("DELETE FROM tracks")
+    fun clear()
+
+    /**
+     * Get all tracks
+     */
+    @Query("SELECT * FROM tracks")
+    fun get(): List<Track>
+
+    @Query("SELECT * FROM tracks WHERE id = :id AND serverId = :serverId LIMIT 1")
+    fun byRef(serverId: Int, id: String): Track?
+
+    /**
+     * Get tracks by album
+     */
+    @Query("SELECT * FROM tracks WHERE albumId LIKE :id")
+    fun byAlbum(id: String): List<Track>
+
+    /**
+     * Get tracks by their containing music directory.
+     */
+    @Query("SELECT * FROM tracks WHERE parent LIKE :id")
+    fun byParent(id: String): List<Track>
+
+    /**
+     * Get tracks by artist
+     */
+    @Query("SELECT * FROM tracks WHERE artistId LIKE :id")
+    fun byArtist(id: String): List<Track>
+
+    /**
+     * Get tracks by genre
+     */
+    @Query("SELECT * FROM tracks WHERE genre LIKE :id ORDER BY title ASC LIMIT :offset,:size")
+    fun byGenre(id: String, size: Int, offset: Int = 0): List<Track>
+}

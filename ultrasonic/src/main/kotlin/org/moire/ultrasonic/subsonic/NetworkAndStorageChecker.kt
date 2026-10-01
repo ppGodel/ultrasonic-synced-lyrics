@@ -1,0 +1,20 @@
+package org.moire.ultrasonic.subsonic
+
+import org.moire.ultrasonic.R
+import org.moire.ultrasonic.app.UApp
+import org.moire.ultrasonic.data.ActiveServerProvider
+import org.moire.ultrasonic.util.UiUtil
+import org.moire.ultrasonic.util.Util
+
+/**
+ * Utility class for checking the availability of the network and storage
+ */
+class NetworkAndStorageChecker(private val activeServerProvider: ActiveServerProvider) {
+    fun warnIfNetworkOrStorageUnavailable() {
+        if (!Util.isExternalStoragePresent()) {
+            UiUtil.toast(R.string.select_album_no_sdcard, true, UApp.applicationContext())
+        } else if (!activeServerProvider.isOffline() && !Util.hasUsableNetwork()) {
+            UiUtil.toast(R.string.select_album_no_network, true, UApp.applicationContext())
+        }
+    }
+}

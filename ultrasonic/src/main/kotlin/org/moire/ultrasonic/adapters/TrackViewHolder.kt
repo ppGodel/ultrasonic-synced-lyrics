@@ -1,0 +1,408 @@
+package org.moire.ultrasonic.adapters
+
+import android.graphics.Color
+import android.graphics.drawable.LayerDrawable
+import android.os.Build
+import android.view.MenuInflater
+import android.view.View
+import android.widget.Checkable
+import android.widget.CheckedTextView
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.PopupMenu
+import android.widget.TextView
+import androidx.core.content.ContextCompat
+import androidx.core.content.res.ResourcesCompat
+import androidx.core.view.isGone
+import androidx.core.view.isVisible
+import androidx.lifecycle.MutableLiveData
+import androidx.media3.common.HeartRating
+import androidx.media3.common.StarRating
+import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.color.MaterialColors
+import com.google.android.material.progressindicator.CircularProgressIndicator
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
+import org.moire.ultrasonic.R
+import org.moire.ultrasonic.data.ActiveServerProvider
+import org.moire.ultrasonic.data.RatingUpdate
+import org.moire.ultrasonic.domain.Track
+import org.moire.ultrasonic.service.DownloadService
+import org.moire.ultrasonic.service.DownloadState
+import org.moire.ultrasonic.service.PlaybackRepository
+import org.moire.ultrasonic.service.PlaybackSnapshot
+import org.moire.ultrasonic.service.UltrasonicBus
+import org.moire.ultrasonic.util.CoroutinePatterns
+import org.moire.ultrasonic.util.FormatUtil
+import org.moire.ultrasonic.util.Settings
+import org.moire.ultrasonic.util.UiUtil.themeColor
+
+const val INDICATOR_THICKNESS_INDEFINITE = 5
+const val INDICATOR_THICKNESS_DEFINITE = 10
+
+/**
+ * Used to display songs and videos in a `ListView`.
+ */
+class TrackViewHolder(
+    val view: View,
+    private val playback: PlaybackRepository,
+    private val activeServerProvider: ActiveServerProvider
+) : RecyclerView.ViewHolder(view),
+    Checkable {
+
+    // Each recycled ViewHolder gets a fresh scope; the previous one is cancelled in
+    // dispose() instead of leaking idle scopes forever.
+    private var scope: CoroutineScope = CoroutinePatterns.loggingScope(Dispatchers.IO)
+
+    companion object {
+        val COLOR_HIGHLIGHT = com.google.android.material.R.attr.colorSecondaryContainer
+    }
+
+    var entry: Track? = null
+        private set
+    private var songLayout: LinearLayout = view.findViewById(R.id.song_layout)
+
+    var check: CheckedTextView = view.findViewById(R.id.song_check)
+    var drag: ImageView = view.findViewById(R.id.song_drag)
+    var observableChecked = MutableLiveData(false)
+
+    private var star: ImageView = view.findViewById(R.id.song_star)
+    private var track: TextView = view.findViewById(R.id.song_track)
+    private var title: TextView = view.findViewById(R.id.song_title)
+    private var artist: TextView = view.findViewById(R.id.song_artist)
+    private var duration: TextView = view.findViewById(R.id.song_duration)
+    private var statusImage: ImageView = view.findViewById(R.id.song_status_image)
+    private var progressIndicator: CircularProgressIndicator =
+        view.findViewById<CircularProgressIndicator>(R.id.song_status_progress).apply {
+            this.max = 100
+        }
+
+    private var isMaximized = false
+    private var cachedStatus = DownloadState.UNKNOWN
+    private var isPlayingCached = false
+
+    private var busSubscription: Job? = null
+    private var ratingSubscription: Job? = null
+    private var playbackSubscription: Job? = null
+
+    @Suppress("ComplexMethod")
+    fun setSong(
+        song: Track,
+        checkable: Boolean,
+        draggable: Boolean,
+        isSelected: Boolean = false,
+        showPlayingInPlayOrder: Boolean = false
+    ) {
+        entry = song
+
+        // Create new Jobs for the new Subscriptions
+        busSubscription?.cancel()
+        ratingSubscription?.cancel()
+        playbackSubscription?.cancel()
+        playbackSubscription = scope.launch(Dispatchers.Main) {
+            playback.snapshot.collect {
+                setPlayIcon(
+                    it.isCurrentTrackAt(bindingAdapterPosition, song.id, showPlayingInPlayOrder)
+                )
+            }
+        }
+
+        busSubscription = scope.launch(Dispatchers.Main) {
+            UltrasonicBus.trackDownloadState.collect {
+                if (it.id != song.id) return@collect
+                updateStatus(it.state, it.progress)
+            }
+        }
+
+        // Listen for rating updates
+        ratingSubscription = scope.launch(Dispatchers.Main) {
+            UltrasonicBus.ratingPublished.collect {
+                // Ignore updates which are not for the current song
+                if (it.id != song.id) return@collect
+
+                if (it.rating is HeartRating) {
+                    updateRatingDisplay(song.userRating, it.rating.isHeart)
+                } else if (it.rating is StarRating) {
+                    updateRatingDisplay(it.rating.starRating.toInt(), song.starred)
+                }
+            }
+        }
+
+        val entryDescription = FormatUtil.readableEntryDescription(song)
+
+        artist.text = entryDescription.artist
+        title.text = entryDescription.title
+        duration.text = entryDescription.duration
+
+        if (Settings.shouldShowTrackNumber && song.track != null && song.track!! > 0) {
+            track.text = entryDescription.trackNumber
+        } else {
+            if (!track.isGone) track.isGone = true
+        }
+
+        val checkValue = (checkable && !song.isVideo)
+        if (check.isVisible != checkValue) check.isVisible = checkValue
+        if (checkValue) initChecked(isSelected)
+        if (drag.isVisible != draggable) drag.isVisible = draggable
+
+        if (activeServerProvider.isOffline()) {
+            star.isGone = true
+        } else {
+            setupRating(song)
+        }
+
+        // Instead of blocking the UI thread while looking up the current state,
+        // launch the request in an IO thread and propagate the result through the bus
+        scope.launch {
+            val state = DownloadService.getDownloadState(song)
+            UltrasonicBus.publishTrackDownloadState(
+                UltrasonicBus.TrackDownloadState(song.id, state, null)
+            )
+        }
+
+        updateRatingDisplay(entry!!.userRating, entry!!.starred)
+
+        if (song.isVideo) {
+            artist.isGone = true
+            progressIndicator.isGone = true
+        }
+    }
+
+    // This is called when the Holder is recycled and receives a new Song
+    fun dispose() {
+        busSubscription?.cancel()
+        ratingSubscription?.cancel()
+        playbackSubscription?.cancel()
+        scope.cancel()
+        scope = CoroutinePatterns.loggingScope(Dispatchers.IO)
+    }
+
+    private val playingIcon by lazy {
+        ContextCompat.getDrawable(view.context, R.drawable.ic_stat_play)!!
+    }
+
+    @Suppress("MagicNumber")
+    private fun setPlayIcon(isPlaying: Boolean) {
+        if (isPlaying && !isPlayingCached) {
+            isPlayingCached = true
+            title.setCompoundDrawablesWithIntrinsicBounds(
+                playingIcon,
+                null,
+                null,
+                null
+            )
+            val color = MaterialColors.getColor(view, COLOR_HIGHLIGHT)
+            songLayout.setBackgroundColor(color)
+            songLayout.elevation = 3F
+        } else if (!isPlaying && isPlayingCached) {
+            isPlayingCached = false
+            title.setCompoundDrawablesWithIntrinsicBounds(
+                0,
+                0,
+                0,
+                0
+            )
+            songLayout.setBackgroundColor(Color.TRANSPARENT)
+            songLayout.elevation = 0F
+        }
+    }
+
+    private fun setupRating(track: Track) {
+        star.isVisible = true
+        updateRatingDisplay(track.userRating, track.starred)
+
+        star.setOnClickListener { toggleHeart(track) }
+        star.setOnLongClickListener { view -> showRatingPopup(view, track) }
+    }
+
+    private fun toggleHeart(track: Track) {
+        track.starred = !track.starred
+        updateRatingDisplay(track.userRating, track.starred)
+        UltrasonicBus.publishRatingSubmitted(
+            RatingUpdate(track.id, HeartRating(track.starred))
+        )
+    }
+
+    @Suppress("MagicNumber")
+    private fun showRatingPopup(view: View, track: Track): Boolean {
+        val popup = PopupMenu(view.context, view)
+        val inflater: MenuInflater = popup.menuInflater
+        inflater.inflate(R.menu.rating, popup.menu)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) popup.setForceShowIcon(true)
+
+        popup.setOnMenuItemClickListener {
+            val rating = when (it.itemId) {
+                R.id.popup_rate_1 -> 1
+                R.id.popup_rate_2 -> 2
+                R.id.popup_rate_3 -> 3
+                R.id.popup_rate_4 -> 4
+                R.id.popup_rate_5 -> 5
+                else -> 0
+            }
+            track.userRating = rating
+            updateRatingDisplay(track.userRating, track.starred)
+            UltrasonicBus.publishRatingSubmitted(
+                RatingUpdate(track.id, StarRating(5, rating.toFloat()))
+            )
+            true
+        }
+        popup.show()
+        return true
+    }
+
+    @Suppress("MagicNumber")
+    private fun updateRatingDisplay(rating: Int?, starred: Boolean) {
+        val ratingDrawable = when (rating) {
+            1 -> R.drawable.rating_star_1
+
+            2 -> R.drawable.rating_star_2
+
+            3 -> R.drawable.rating_star_3
+
+            4 -> R.drawable.rating_star_4
+
+            5 -> R.drawable.rating_star_5
+
+            else -> {
+                R.drawable.rating_star_0
+            }
+        }
+
+        val layers = if (starred) {
+            arrayOf(
+                ResourcesCompat.getDrawable(view.resources, ratingDrawable, null)!!,
+                ResourcesCompat.getDrawable(
+                    view.resources,
+                    R.drawable.rating_heart_mini_overlay,
+                    null
+                )!!
+            )
+        } else {
+            arrayOf(
+                ResourcesCompat.getDrawable(view.resources, ratingDrawable, null)!!
+            )
+        }
+
+        val ratingDisplay = LayerDrawable(layers)
+        ratingDisplay.getDrawable(0).setTint(
+            view.context.themeColor(com.google.android.material.R.attr.colorOnBackground)
+        )
+        if (starred) {
+            ratingDisplay.getDrawable(1).setTint(
+                view.context.themeColor(com.google.android.material.R.attr.colorTertiary)
+            )
+        }
+
+        star.setImageDrawable(ratingDisplay)
+    }
+
+    private fun updateStatus(status: DownloadState, progress: Int?) {
+        progressIndicator.progress = progress ?: 0
+
+        if (status == cachedStatus) return
+        cachedStatus = status
+
+        when (status) {
+            DownloadState.DONE -> {
+                showStatusImage(R.drawable.ic_downloaded)
+            }
+
+            DownloadState.PINNED -> {
+                showStatusImage(R.drawable.ic_menu_pin)
+            }
+
+            DownloadState.FAILED -> {
+                showStatusImage(R.drawable.ic_baseline_error)
+            }
+
+            DownloadState.DOWNLOADING -> {
+                showProgress()
+            }
+
+            DownloadState.RETRYING,
+            DownloadState.QUEUED
+            -> {
+                showIndefiniteProgress()
+            }
+
+            else -> {
+                // This handles CANCELLED too.
+                // Usually it means no error, just that the track wasn't downloaded
+                showStatusImage(null)
+            }
+        }
+    }
+
+    private fun showStatusImage(image: Int?) {
+        progressIndicator.isGone = true
+        statusImage.isVisible = true
+        if (image != null) {
+            statusImage.setImageResource(image)
+        } else {
+            statusImage.setImageDrawable(null)
+        }
+    }
+
+    private fun showIndefiniteProgress() {
+        statusImage.isGone = true
+        progressIndicator.isVisible = true
+        progressIndicator.isIndeterminate = true
+        progressIndicator.indicatorDirection =
+            CircularProgressIndicator.INDICATOR_DIRECTION_COUNTERCLOCKWISE
+        progressIndicator.trackThickness = INDICATOR_THICKNESS_INDEFINITE
+    }
+
+    private fun showProgress() {
+        statusImage.isGone = true
+        progressIndicator.isVisible = true
+        progressIndicator.isIndeterminate = false
+        progressIndicator.indicatorDirection =
+            CircularProgressIndicator.INDICATOR_DIRECTION_CLOCKWISE
+        progressIndicator.trackThickness = INDICATOR_THICKNESS_DEFINITE
+    }
+
+    /*
+     * Set the checked value and re-init the MutableLiveData.
+     * If we would post a new value, there might be a short glitch where the track is shown with its
+     * old selection status before the posted value has been processed.
+     */
+    private fun initChecked(newStatus: Boolean) {
+        observableChecked = MutableLiveData(newStatus)
+        check.isChecked = newStatus
+    }
+
+    /*
+     * To be correct, this method doesn't directly set the checked status.
+     * It only notifies the observable. If the selection tracker accepts the selection
+     *  (might be false for Singular SelectionTrackers) then it will cause the actual modification.
+     */
+    override fun setChecked(newStatus: Boolean) {
+        observableChecked.postValue(newStatus)
+    }
+
+    override fun isChecked(): Boolean = check.isChecked
+
+    override fun toggle() {
+        isChecked = isChecked
+    }
+
+    fun maximizeOrMinimize() {
+        isMaximized = !isMaximized
+
+        title.isSingleLine = !isMaximized
+        artist.isSingleLine = !isMaximized
+    }
+}
+
+internal fun PlaybackSnapshot.isCurrentTrackAt(
+    displayedIndex: Int,
+    mediaId: String,
+    usePlayOrder: Boolean
+): Boolean {
+    val currentIndex = if (usePlayOrder) currentPlayOrderIndex else currentMediaItemIndex
+    return currentMediaItem?.mediaId == mediaId && currentIndex == displayedIndex
+}

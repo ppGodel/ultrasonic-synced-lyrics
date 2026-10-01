@@ -1,0 +1,168 @@
+plugins {
+    alias libs.plugins.ksp
+}
+
+apply plugin: 'com.android.application'
+apply plugin: "androidx.navigation.safeargs.kotlin"
+apply from: "../gradle_scripts/code_quality.gradle"
+
+def getGitCommitHash() {
+    // CI_COMMIT_SHORT_SHA is set by GitLab CI; fall back to git for local builds
+    def ciSha = System.getenv('CI_COMMIT_SHORT_SHA')
+    if (ciSha) return ciSha
+    def stdout = new ByteArrayOutputStream()
+    try {
+        exec {
+            commandLine 'git', 'rev-parse', '--short', 'HEAD'
+            standardOutput = stdout
+        }
+        return stdout.toString().trim()
+    } catch (Exception ignored) {
+        return 'unknown'
+    }
+}
+
+android {
+    compileSdkVersion rootProject.ext.versions.compileSdk
+
+    defaultConfig {
+        applicationId "org.moire.ultrasonic"
+        versionCode 131
+        versionName "4.9.0"
+
+        minSdkVersion rootProject.ext.versions.minSdk
+        targetSdkVersion rootProject.ext.versions.targetSdk
+        resourceConfigurations += ['cs', 'de', 'en', 'es', 'fr', 'gl', 'hu', 'it', 'ja', 'nb-rNO', 'nl', 'pl', 'pt', 'pt-rBR', 'ru', 'zh-rCN', 'zh-rTW']
+        buildConfigField 'String', 'GIT_COMMIT', '""'
+    }
+
+    bundle.language.enableSplit = false
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources = true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),
+                    'minify/proguard-main.pro',
+                    'minify/proguard-okhttp.pro',
+                    'minify/proguard-retrofit.pro',
+                    'minify/proguard-jackson.pro',
+                    'minify/proguard-kotlin-reflect.pro',
+                    'minify/proguard-kotlin.pro',
+                    'minify/proguard-coil.pro'
+        }
+        debug {
+            minifyEnabled = false
+            applicationIdSuffix = '.debug'
+            enableUnitTestCoverage = true
+            enableAndroidTestCoverage = true
+            buildConfigField 'String', 'GIT_COMMIT', "\"${getGitCommitHash()}\""
+        }
+    }
+
+    sourceSets {
+        main.java.srcDirs += "${projectDir}/src/main/kotlin"
+        test.java.srcDirs += "${projectDir}/src/test/kotlin"
+    }
+
+    packagingOptions {
+        resources {
+            excludes += ['META-INF/LICENSE']
+        }
+    }
+
+    kotlin {
+        jvmToolchain {
+            languageVersion.set(JavaLanguageVersion.of(21))
+        }
+    }
+
+    buildFeatures {
+        viewBinding = true
+        dataBinding = true
+        buildConfig = true
+    }
+
+    ksp {
+        arg("room.schemaLocation", "$rootDir/ultrasonic/schemas")
+    }
+
+    lint {
+        baseline = file("lint-baseline.xml")
+        abortOnError = true
+        warningsAsErrors = true
+        warning 'ImpliedQuantity'
+        disable 'IconMissingDensityFolder', 'VectorPath'
+        disable 'MissingTranslation', 'UnusedQuantity', 'MissingQuantity'
+        disable 'ObsoleteLintCustomCheck'
+        // We manage dependencies on Gitlab with RenovateBot
+        disable 'GradleDependency'
+        disable 'NewerVersionAvailable'
+        disable 'AndroidGradlePluginVersion'
+        textReport = true
+        checkDependencies = true
+    }
+    namespace = 'org.moire.ultrasonic'
+
+}
+
+tasks.withType(Test).configureEach {
+    useJUnitPlatform()
+}
+
+dependencies {
+    implementation project(':core:domain')
+    implementation project(':core:subsonic-api')
+
+    implementation libs.car
+    implementation libs.core
+    implementation libs.testCore
+    implementation libs.design
+    implementation libs.roomRuntime
+    implementation libs.roomKtx
+    implementation libs.viewModelKtx
+    implementation libs.constraintLayout
+    implementation libs.documentfile
+    implementation libs.preferences
+    implementation libs.media3common
+    implementation libs.media3exoplayer
+    implementation libs.media3session
+    implementation libs.media3datasource
+    implementation libs.media3okhttp
+    implementation libs.media3inspector
+    implementation libs.swipeRefresh
+
+    implementation libs.navigationFragment
+    implementation libs.navigationUi
+    implementation libs.navigationFragmentKtx
+    implementation libs.navigationUiKtx
+    implementation libs.navigationFeature
+
+    implementation libs.kotlinStdlib
+    implementation libs.kotlinxCoroutines
+    implementation libs.kotlinxGuava
+    implementation libs.kotlinxCoroutinesTest
+    implementation libs.koinAndroid
+    implementation libs.coil
+    implementation libs.okhttpLogging
+    implementation libs.fastScroll
+    implementation libs.colorPickerView
+    implementation libs.multiType
+
+    ksp libs.room
+
+    testImplementation libs.kotlinReflect
+    testImplementation libs.junit
+    testRuntimeOnly libs.junitVintage
+    testRuntimeOnly libs.junitPlatformLauncher
+    testImplementation libs.kotlinJunit
+    testImplementation libs.kluent
+    testImplementation libs.mockito
+    testImplementation libs.mockitoKotlin
+    testImplementation libs.robolectric
+    testImplementation libs.kotlinxCoroutinesTest
+    testImplementation libs.koinTest
+    testImplementation libs.testCore
+
+    implementation libs.timber
+}

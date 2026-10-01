@@ -1,0 +1,20 @@
+plugins {
+    alias libs.plugins.ksp
+}
+
+apply from: rootProject.ext.bootstrap.androidModule
+
+dependencies {
+    implementation libs.core
+    implementation libs.roomRuntime
+    implementation libs.roomKtx
+    ksp libs.room
+}
+
+android {
+    namespace = 'org.moire.ultrasonic.subsonic.domain'
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+}
