@@ -113,7 +113,7 @@ class LyricsFragment :
 
             result.fold(
                 onSuccess = { lyrics ->
-                    if (lyrics == null || lyrics.artist == null) {
+                    if (lyrics == null || lyrics.text.isNullOrBlank()) {
                         showStatus(getString(R.string.lyrics_nomatch))
                     } else {
                         artistView?.text = lyrics.artist
