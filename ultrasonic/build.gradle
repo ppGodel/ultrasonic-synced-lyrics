@@ -38,6 +38,15 @@ android {
 
     bundle.language.enableSplit = false
 
+    signingConfigs {
+        debugStable {
+            storeFile file(System.getenv("DEBUG_KEYSTORE_PATH") ?: rootProject.file("debug.keystore"))
+            storePassword System.getenv("DEBUG_KEYSTORE_PASSWORD") ?: "android"
+            keyAlias System.getenv("DEBUG_KEY_ALIAS") ?: "ultrasonic-debug"
+            keyPassword System.getenv("DEBUG_KEY_PASSWORD") ?: "android"
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled true
@@ -52,6 +61,7 @@ android {
                     'minify/proguard-coil.pro'
         }
         debug {
+            signingConfig signingConfigs.debugStable
             minifyEnabled = false
             applicationIdSuffix = '.debug'
             enableUnitTestCoverage = true
