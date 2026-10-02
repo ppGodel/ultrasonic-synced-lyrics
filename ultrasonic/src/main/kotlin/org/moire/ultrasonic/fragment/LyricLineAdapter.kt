@@ -7,13 +7,13 @@
 
 package org.moire.ultrasonic.fragment
 
-import android.util.TypedValue
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import org.moire.ultrasonic.R
+import org.moire.ultrasonic.util.UiUtil.themeColor
 
 /**
  * Renders karaoke-style lyric lines. The active line is larger, accent-coloured
@@ -53,24 +53,18 @@ class LyricLineAdapter(
             textView.textSize = 20f
             textView.alpha = 1.0f
             textView.setTextColor(
-                resolveThemeColor(textView, com.google.android.material.R.attr.colorPrimary)
+                textView.context.themeColor(android.R.attr.colorPrimary)
             )
         } else {
             textView.textSize = 16f
             textView.alpha = 0.5f
             textView.setTextColor(
-                resolveThemeColor(textView, com.google.android.material.R.attr.colorOnSurface)
+                textView.context.themeColor(com.google.android.material.R.attr.colorOnSurface)
             )
         }
     }
 
     override fun getItemCount(): Int = lines.size
-
-    private fun resolveThemeColor(view: View, attr: Int): Int {
-        val typedValue = TypedValue()
-        view.context.theme.resolveAttribute(attr, typedValue, true)
-        return typedValue.data
-    }
 
     class ViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
         val textView: TextView = itemView.findViewById(R.id.lyric_line_text)
