@@ -57,6 +57,17 @@
                     a:clipToPadding="false"
                     />
 
+            <TextView
+                    a:id="@+id/lyrics_status"
+                    a:layout_width="match_parent"
+                    a:layout_height="0dp"
+                    a:layout_weight="1"
+                    a:gravity="center"
+                    a:padding="24dip"
+                    a:textAppearance="?android:attr/textAppearanceMedium"
+                    a:visibility="gone"
+                    />
+
         </LinearLayout>
 
     </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>

@@ -34,7 +34,6 @@ import org.moire.ultrasonic.service.MusicServiceFactory
 import org.moire.ultrasonic.util.toTrack
 import org.moire.ultrasonic.util.RefreshableFragment
 import org.moire.ultrasonic.util.UiUtil.applyTheme
-import org.moire.ultrasonic.util.toastingExceptionHandler
 
 /**
  * Displays the lyrics of a song, highlighting the currently-playing line
@@ -48,6 +47,7 @@ class LyricsFragment :
     private val playerViewModel: PlayerViewModel by viewModel()
     private var artistView: TextView? = null
     private var titleView: TextView? = null
+    private var statusView: TextView? = null
     private var recyclerView: RecyclerView? = null
     private var adapter: LyricLineAdapter = LyricLineAdapter(emptyList())
     override var swipeRefresh: SwipeRefreshLayout? = null
@@ -76,6 +76,7 @@ class LyricsFragment :
         swipeRefresh?.isEnabled = false
         artistView = view.findViewById(R.id.lyrics_artist)
         titleView = view.findViewById(R.id.lyrics_title)
+        statusView = view.findViewById(R.id.lyrics_status)
         recyclerView = view.findViewById(R.id.lyrics_recycler)
         recyclerView?.layoutManager = LinearLayoutManager(requireContext())
         recyclerView?.adapter = adapter
@@ -101,27 +102,49 @@ class LyricsFragment :
     private fun load(artist: String, title: String) {
         lyricsJob?.cancel()
         trackingJob?.cancel()
-        lyricsJob = viewLifecycleOwner.lifecycleScope.launch(toastingExceptionHandler()) {
-            val result = withContext(Dispatchers.IO) {
-                val musicService = musicServiceFactory.getMusicService()
-                musicService.getLyrics(artist, title)!!
+        lyricsJob = viewLifecycleOwner.lifecycleScope.launch {
+            swipeRefresh?.isRefreshing = true
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    musicServiceFactory.getMusicService().getLyrics(artist, title)
+                }
             }
             swipeRefresh?.isRefreshing = false
-            if (result.artist != null) {
-                artistView?.text = result.artist
-                titleView?.text = result.title
 
-                val lines = parseLrc(result.text ?: "")
-                adapter = LyricLineAdapter(lines)
-                recyclerView?.adapter = adapter
+            result.fold(
+                onSuccess = { lyrics ->
+                    if (lyrics == null || lyrics.artist == null) {
+                        showStatus(getString(R.string.lyrics_nomatch))
+                    } else {
+                        artistView?.text = lyrics.artist
+                        titleView?.text = lyrics.title
+                        showLyrics()
 
-                if (lines.any { it.first >= 0L }) {
-                    trackingJob = startPositionTracking(lines)
+                        val lines = parseLrc(lyrics.text ?: "")
+                        adapter = LyricLineAdapter(lines)
+                        recyclerView?.adapter = adapter
+
+                        if (lines.any { it.first >= 0L }) {
+                            trackingJob = startPositionTracking(lines)
+                        }
+                    }
+                },
+                onFailure = { error ->
+                    showStatus(getString(R.string.lyrics_load_error, error.localizedMessage ?: error.javaClass.simpleName))
                 }
-            } else {
-                artistView?.setText(R.string.lyrics_nomatch)
-            }
+            )
         }
+    }
+
+    private fun showStatus(message: String) {
+        statusView?.text = message
+        statusView?.visibility = View.VISIBLE
+        recyclerView?.visibility = View.GONE
+    }
+
+    private fun showLyrics() {
+        statusView?.visibility = View.GONE
+        recyclerView?.visibility = View.VISIBLE
     }
 
     /**

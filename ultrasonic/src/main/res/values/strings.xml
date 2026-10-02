@@ -93,7 +93,8 @@
     <string name="equalizer.preset">Select Preset</string>
     <string name="error.label">Error</string>
     <string name="jukebox.is_default">Jukebox By Default</string>
-    <string name="lyrics.nomatch">No lyrics found</string>
+    <string name="lyrics.nomatch">No lyrics found for this song on the server</string>
+    <string name="lyrics.load_error">Error loading lyrics:\n%s</string>
     <string name="language.default">System default</string>
     <string name="language.zh_CN">Chinese (China)</string>
     <string name="language.zh_TW">Chinese (Taiwan)</string>
