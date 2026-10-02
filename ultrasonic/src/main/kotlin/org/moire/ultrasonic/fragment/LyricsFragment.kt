@@ -16,10 +16,13 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.fragment.navArgs
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.LinearSmoothScroller
 import androidx.recyclerview.widget.RecyclerView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.koin.android.ext.android.inject
@@ -28,6 +31,7 @@ import org.moire.ultrasonic.R
 import org.moire.ultrasonic.fragment.FragmentTitle.setTitle
 import org.moire.ultrasonic.model.PlayerViewModel
 import org.moire.ultrasonic.service.MusicServiceFactory
+import org.moire.ultrasonic.util.toTrack
 import org.moire.ultrasonic.util.RefreshableFragment
 import org.moire.ultrasonic.util.UiUtil.applyTheme
 import org.moire.ultrasonic.util.toastingExceptionHandler
@@ -35,6 +39,7 @@ import org.moire.ultrasonic.util.toastingExceptionHandler
 /**
  * Displays the lyrics of a song, highlighting the currently-playing line
  * karaoke-style when the lyrics carry LRC timestamps.
+ * Automatically reloads when the playing song changes.
  */
 class LyricsFragment :
     Fragment(),
@@ -48,6 +53,10 @@ class LyricsFragment :
     override var swipeRefresh: SwipeRefreshLayout? = null
 
     private val navArgs by navArgs<LyricsFragmentArgs>()
+
+    // Cancelled and restarted whenever a new song starts.
+    private var lyricsJob: Job? = null
+    private var trackingJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -70,16 +79,32 @@ class LyricsFragment :
         recyclerView = view.findViewById(R.id.lyrics_recycler)
         recyclerView?.layoutManager = LinearLayoutManager(requireContext())
         recyclerView?.adapter = adapter
-        load()
+
+        // Initial load from navArgs.
+        load(navArgs.artist, navArgs.title)
+
+        // Reload whenever the playing song changes.
+        viewLifecycleOwner.lifecycleScope.launch {
+            playerViewModel.uiState
+                .distinctUntilChangedBy { it.currentMediaItemIndex }
+                .collect { snapshot ->
+                    val track = snapshot.currentMediaItem?.toTrack() ?: return@collect
+                    val artist = track.artist ?: return@collect
+                    val title = track.title ?: return@collect
+                    // Avoid redundant reload on first emission (navArgs already loaded).
+                    if (artist == navArgs.artist && title == navArgs.title) return@collect
+                    load(artist, title)
+                }
+        }
     }
 
-    private fun load() {
-        viewLifecycleOwner.lifecycleScope.launch(
-            toastingExceptionHandler()
-        ) {
+    private fun load(artist: String, title: String) {
+        lyricsJob?.cancel()
+        trackingJob?.cancel()
+        lyricsJob = viewLifecycleOwner.lifecycleScope.launch(toastingExceptionHandler()) {
             val result = withContext(Dispatchers.IO) {
                 val musicService = musicServiceFactory.getMusicService()
-                musicService.getLyrics(navArgs.artist, navArgs.title)!!
+                musicService.getLyrics(artist, title)!!
             }
             swipeRefresh?.isRefreshing = false
             if (result.artist != null) {
@@ -90,9 +115,8 @@ class LyricsFragment :
                 adapter = LyricLineAdapter(lines)
                 recyclerView?.adapter = adapter
 
-                // Only track playback position for timed lyrics.
                 if (lines.any { it.first >= 0L }) {
-                    startPositionTracking(lines)
+                    trackingJob = startPositionTracking(lines)
                 }
             } else {
                 artistView?.setText(R.string.lyrics_nomatch)
@@ -133,7 +157,7 @@ class LyricsFragment :
         }
     }
 
-    private fun startPositionTracking(lines: List<Pair<Long, String>>) {
+    private fun startPositionTracking(lines: List<Pair<Long, String>>): Job =
         viewLifecycleOwner.lifecycleScope.launch {
             var lastIndex = -1
             while (true) {
@@ -143,10 +167,26 @@ class LyricsFragment :
                 if (index != lastIndex) {
                     lastIndex = index
                     adapter.setActiveIndex(index)
-                    recyclerView?.smoothScrollToPosition(index)
+                    scrollToCenter(index)
                 }
                 delay(500L)
             }
         }
+
+    private fun scrollToCenter(index: Int) {
+        val rv = recyclerView ?: return
+        val lm = rv.layoutManager as? LinearLayoutManager ?: return
+        val scroller = object : LinearSmoothScroller(requireContext()) {
+            override fun calculateDtToFit(
+                viewStart: Int,
+                viewEnd: Int,
+                boxStart: Int,
+                boxEnd: Int,
+                snapPreference: Int
+            ): Int =
+                (boxStart + (boxEnd - boxStart) / 2) - (viewStart + (viewEnd - viewStart) / 2)
+        }
+        scroller.targetPosition = index
+        lm.startSmoothScroll(scroller)
     }
 }
